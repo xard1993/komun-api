@@ -1,7 +1,9 @@
+import type { Request, Response, NextFunction } from "express";
 import { Router } from "express";
 import { z } from "zod";
 import crypto from "node:crypto";
 import { requireAuth } from "../middleware/auth.js";
+import { requireStaff } from "../middleware/role.js";
 import { createTenant } from "../services/tenantService.js";
 import { publicDb } from "../db/index.js";
 import { tenants, tenantUsers, invites as invitesTable } from "../db/schema/public.js";
@@ -10,6 +12,16 @@ import { eq } from "drizzle-orm";
 export const controlRouter = Router();
 
 controlRouter.use(requireAuth);
+
+function setTenantFromParam(req: Request, res: Response, next: NextFunction): void {
+  const tenantSlug = req.params.tenantSlug;
+  if (!tenantSlug || !req.user!.tenantSlugs.includes(tenantSlug)) {
+    res.status(403).json({ error: "Access denied to this tenant" });
+    return;
+  }
+  req.tenantSlug = tenantSlug;
+  next();
+}
 
 const createInviteSchema = z.object({
   email: z.string().email(),
@@ -52,12 +64,8 @@ controlRouter.get("/tenants", async (req, res) => {
   res.json(list);
 });
 
-controlRouter.post("/tenants/:tenantSlug/invites", async (req, res) => {
-  const tenantSlug = req.params.tenantSlug;
-  if (!req.user!.tenantSlugs.includes(tenantSlug)) {
-    res.status(403).json({ error: "Access denied to this tenant" });
-    return;
-  }
+controlRouter.post("/tenants/:tenantSlug/invites", setTenantFromParam, requireStaff, async (req, res) => {
+  const tenantSlug = req.tenantSlug!;
   const parsed = createInviteSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });

@@ -10,6 +10,8 @@ import { announcementsRouter } from "./routes/announcements.js";
 import { ticketsRouter } from "./routes/tickets.js";
 import { documentsRouter } from "./routes/documents.js";
 import { dashboardRouter } from "./routes/dashboard.js";
+import { meRouter } from "./routes/me.js";
+import { usersRouter } from "./routes/users.js";
 
 const app = express();
 const port = process.env.PORT ?? 4000;
@@ -26,6 +28,8 @@ app.use("/announcements", announcementsRouter);
 app.use("/tickets", ticketsRouter);
 app.use("/documents", documentsRouter);
 app.use("/dashboard", dashboardRouter);
+app.use("/me", meRouter);
+app.use("/users", usersRouter);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 

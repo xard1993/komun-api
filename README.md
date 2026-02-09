@@ -38,9 +38,25 @@ Backend API for Komun – multi-tenant condominium management (Malta MVP).
 - `npm run db:migrate` – run public schema migrations
 - `npm run db:seed` – seed demo user + tenant
 - `npm run db:create-tenant` – CLI: `npm run db:create-tenant -- <name> <slug> <owner-email>`
+- `npm run db:migrate-tenant-all` – apply pending tenant migrations to **all** existing tenants (run after adding a new tenant migration)
+- `npm run db:migrate-tenant -- <slug>` – apply pending tenant migrations to one tenant (e.g. `demo`)
 - `npm run test` – run tests
+
+## When to run migrations
+
+You **don’t** run migrations every time you start the app. Only when the **schema changes** (new migration files added):
+
+1. **Public schema** – After pulling or adding new public migrations:
+   ```bash
+   npm run db:migrate
+   ```
+
+2. **Existing tenants** – After adding a new **tenant** migration (e.g. new column in announcements), existing tenant schemas don’t get it automatically. Run once:
+   ```bash
+   npm run db:migrate-tenant-all
+   ```
+   New tenants created after that will already have the new schema when they’re created.
 
 ## Tenant creation
 
 New tenants are created via `POST /control/tenants` (authenticated). The API creates a new schema `tenant_<slug>` and runs the tenant migrations inside it. All tenant-scoped requests must send the `X-Tenant` header.
-# komun-api

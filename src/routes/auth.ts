@@ -31,11 +31,15 @@ authRouter.post("/login", async (req, res) => {
     return;
   }
   const tenantRows = await publicDb
-    .select({ slug: tenants.slug })
+    .select({ slug: tenants.slug, role: tenantUsers.role })
     .from(tenantUsers)
     .innerJoin(tenants, eq(tenantUsers.tenantId, tenants.id))
     .where(eq(tenantUsers.userId, user.id));
   const tenantSlugs = tenantRows.map((r) => r.slug);
+  const roleByTenant: Record<string, string> = {};
+  for (const r of tenantRows) {
+    roleByTenant[r.slug] = r.role;
+  }
   const accessToken = signToken({
     sub: user.id,
     email: user.email,
@@ -47,6 +51,7 @@ authRouter.post("/login", async (req, res) => {
       email: user.email,
       name: user.name,
       tenantSlugs,
+      roleByTenant,
     },
     accessToken,
   });

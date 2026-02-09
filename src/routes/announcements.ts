@@ -1,12 +1,13 @@
 import { Router } from "express";
 import { z } from "zod";
 import { requireAuth, requireTenant } from "../middleware/auth.js";
+import { isResident, getResidentBuildingIds, requireStaff } from "../middleware/role.js";
 import { tenantDb } from "../db/tenantDb.js";
 import {
   announcements as announcementsTable,
   announcementSeen,
 } from "../db/schema/tenant.js";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, or, inArray, isNull } from "drizzle-orm";
 
 export const announcementsRouter = Router();
 announcementsRouter.use(requireAuth, requireTenant);
@@ -14,6 +15,7 @@ announcementsRouter.use(requireAuth, requireTenant);
 const createAnnouncementSchema = z.object({
   title: z.string().min(1).max(255),
   body: z.string().optional(),
+  buildingId: z.number().int().positive().optional().nullable(),
 });
 const updateAnnouncementSchema = createAnnouncementSchema.partial();
 
@@ -21,10 +23,24 @@ announcementsRouter.get("/", async (req, res) => {
   const slug = req.tenantSlug!;
   const userId = req.user!.userId;
   const list = await tenantDb(slug, async (db) => {
-    const rows = await db
-      .select()
-      .from(announcementsTable)
-      .orderBy(desc(announcementsTable.createdAt));
+    let rows;
+    if (isResident(req)) {
+      const buildingIds = await getResidentBuildingIds(slug, userId);
+      const residentCondition =
+        buildingIds.length > 0
+          ? or(isNull(announcementsTable.buildingId), inArray(announcementsTable.buildingId, buildingIds))
+          : isNull(announcementsTable.buildingId);
+      rows = await db
+        .select()
+        .from(announcementsTable)
+        .where(residentCondition)
+        .orderBy(desc(announcementsTable.createdAt));
+    } else {
+      rows = await db
+        .select()
+        .from(announcementsTable)
+        .orderBy(desc(announcementsTable.createdAt));
+    }
     const withSeen = await Promise.all(
       rows.map(async (row) => {
         const [seenRow] = await db
@@ -45,7 +61,7 @@ announcementsRouter.get("/", async (req, res) => {
   res.json(list);
 });
 
-announcementsRouter.post("/", async (req, res) => {
+announcementsRouter.post("/", requireStaff, async (req, res) => {
   const parsed = createAnnouncementSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
@@ -56,7 +72,9 @@ announcementsRouter.post("/", async (req, res) => {
     db
       .insert(announcementsTable)
       .values({
-        ...parsed.data,
+        title: parsed.data.title,
+        body: parsed.data.body ?? null,
+        buildingId: parsed.data.buildingId ?? null,
         createdBy: req.user!.userId,
       })
       .returning()
@@ -78,10 +96,17 @@ announcementsRouter.get("/:id", async (req, res) => {
     res.status(404).json({ error: "Not found" });
     return;
   }
+  if (isResident(req) && row.buildingId != null) {
+    const buildingIds = await getResidentBuildingIds(slug, req.user!.userId);
+    if (!buildingIds.includes(row.buildingId)) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+  }
   res.json(row);
 });
 
-announcementsRouter.patch("/:id", async (req, res) => {
+announcementsRouter.patch("/:id", requireStaff, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (Number.isNaN(id)) {
     res.status(400).json({ error: "Invalid id" });
@@ -107,7 +132,7 @@ announcementsRouter.patch("/:id", async (req, res) => {
   res.json(row);
 });
 
-announcementsRouter.delete("/:id", async (req, res) => {
+announcementsRouter.delete("/:id", requireStaff, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (Number.isNaN(id)) {
     res.status(400).json({ error: "Invalid id" });

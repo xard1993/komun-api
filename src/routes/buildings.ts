@@ -1,12 +1,15 @@
 import { Router } from "express";
 import { z } from "zod";
 import { requireAuth, requireTenant } from "../middleware/auth.js";
+import { requireStaff } from "../middleware/role.js";
 import { tenantDb } from "../db/tenantDb.js";
-import { buildings as buildingsTable, units as unitsTable } from "../db/schema/tenant.js";
-import { eq } from "drizzle-orm";
+import { publicDb } from "../db/index.js";
+import { users } from "../db/schema/public.js";
+import { buildings as buildingsTable, units as unitsTable, unitMembers } from "../db/schema/tenant.js";
+import { eq, inArray } from "drizzle-orm";
 
 export const buildingsRouter = Router();
-buildingsRouter.use(requireAuth, requireTenant);
+buildingsRouter.use(requireAuth, requireTenant, requireStaff);
 
 const createBuildingSchema = z.object({
   name: z.string().min(1).max(255),
@@ -98,10 +101,40 @@ buildingsRouter.get("/:id/units", async (req, res) => {
     return;
   }
   const slug = req.tenantSlug!;
-  const list = await tenantDb(slug, (db) =>
+  const withMembers = req.query.includeMembers === "true";
+  const units = await tenantDb(slug, (db) =>
     db.select().from(unitsTable).where(eq(unitsTable.buildingId, buildingId))
   );
-  res.json(list);
+  if (!withMembers || units.length === 0) {
+    res.json(units);
+    return;
+  }
+  const unitIds = units.map((u) => u.id);
+  const allMembers = await tenantDb(slug, (db) =>
+    db.select().from(unitMembers).where(inArray(unitMembers.unitId, unitIds))
+  );
+  const userIds = [...new Set(allMembers.map((m) => m.userId))];
+  const userRows =
+    userIds.length > 0
+      ? await publicDb.select({ id: users.id, email: users.email, name: users.name }).from(users).where(inArray(users.id, userIds))
+      : [];
+  const userMap = Object.fromEntries(userRows.map((u) => [u.id, u]));
+  const membersByUnit: Record<number, Array<{ userId: number; email: string; name: string | null; role: string }>> = {};
+  for (const u of units) membersByUnit[u.id] = [];
+  for (const m of allMembers) {
+    membersByUnit[m.unitId]?.push({
+      userId: m.userId,
+      email: userMap[m.userId]?.email ?? "",
+      name: userMap[m.userId]?.name ?? null,
+      role: m.role,
+    });
+  }
+  res.json(
+    units.map((u) => ({
+      ...u,
+      members: membersByUnit[u.id] ?? [],
+    }))
+  );
 });
 
 buildingsRouter.post("/:id/units", async (req, res) => {

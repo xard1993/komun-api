@@ -57,6 +57,7 @@ export const unitMembers = pgTable("unit_members", {
 
 export const announcements = pgTable("announcements", {
   id: serial("id").primaryKey(),
+  buildingId: integer("building_id"), // null = all buildings
   title: varchar("title", { length: 255 }).notNull(),
   body: text("body"),
   createdBy: integer("created_by").notNull(),
@@ -122,6 +123,7 @@ export const ticketAttachments = pgTable("ticket_attachments", {
 
 export const documents = pgTable("documents", {
   id: serial("id").primaryKey(),
+  buildingId: integer("building_id"), // null = tenant-wide (all buildings)
   title: varchar("title", { length: 255 }).notNull(),
   fileKey: varchar("file_key", { length: 512 }).notNull(),
   filename: varchar("filename", { length: 255 }).notNull(),

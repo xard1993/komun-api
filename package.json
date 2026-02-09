@@ -12,6 +12,9 @@
     "db:migrate": "tsx src/scripts/migrate-public.ts",
     "db:seed": "tsx src/scripts/seed.ts",
     "db:create-tenant": "tsx src/scripts/create-tenant.ts",
+    "db:migrate-tenant": "tsx src/scripts/migrate-tenant-existing.ts",
+    "db:migrate-tenant-all": "tsx src/scripts/migrate-all-tenants.ts",
+    "db:reset-admin-password": "tsx src/scripts/reset-admin-password.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

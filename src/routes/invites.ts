@@ -85,11 +85,11 @@ invitesRouter.post("/accept/:token", async (req, res) => {
     .where(and(eq(tenantUsers.tenantId, tenant.id), eq(tenantUsers.userId, user.id)))
     .limit(1);
   if (existingTu.length === 0) {
-    const orgRole = invite.role === "resident" ? "support" : invite.role;
+    const orgRole = invite.role as "org_owner" | "org_admin" | "property_manager" | "accountant" | "support" | "resident";
     await publicDb.insert(tenantUsers).values({
       tenantId: tenant.id,
       userId: user.id,
-      role: orgRole as "org_owner" | "org_admin" | "property_manager" | "accountant" | "support",
+      role: orgRole,
     });
   }
   if (invite.role === "resident" && invite.unitId) {

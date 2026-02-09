@@ -15,6 +15,7 @@ export const orgRoleEnum = pgEnum("org_role", [
   "property_manager",
   "accountant",
   "support",
+  "resident",
 ]);
 
 export const tenants = pgTable("tenants", {

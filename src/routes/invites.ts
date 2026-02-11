@@ -4,7 +4,7 @@ import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import { publicDb } from "../db/index.js";
 import { invites as invitesTable, tenants, users, tenantUsers } from "../db/schema/public.js";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { tenantDb } from "../db/tenantDb.js";
 import { unitMembers } from "../db/schema/tenant.js";
 import { signToken } from "../middleware/auth.js";
@@ -25,11 +25,13 @@ invitesRouter.get("/accept/:token", async (req, res) => {
       unitId: invitesTable.unitId,
       expiresAt: invitesTable.expiresAt,
       tenantId: invitesTable.tenantId,
+      acceptedAt: invitesTable.acceptedAt,
+      revokedAt: invitesTable.revokedAt,
     })
     .from(invitesTable)
     .where(eq(invitesTable.token, token))
     .limit(1);
-  if (!inv || new Date(inv.expiresAt) < new Date()) {
+  if (!inv || inv.acceptedAt || inv.revokedAt || new Date(inv.expiresAt) < new Date()) {
     res.status(404).json({ error: "Invite not found or expired" });
     return;
   }
@@ -58,7 +60,7 @@ invitesRouter.post("/accept/:token", async (req, res) => {
     .from(invitesTable)
     .where(eq(invitesTable.token, token))
     .limit(1);
-  if (!invite || new Date(invite.expiresAt) < new Date()) {
+  if (!invite || invite.acceptedAt || invite.revokedAt || new Date(invite.expiresAt) < new Date()) {
     res.status(404).json({ error: "Invite not found or expired" });
     return;
   }
@@ -68,6 +70,7 @@ invitesRouter.post("/accept/:token", async (req, res) => {
     return;
   }
   let [user] = await publicDb.select().from(users).where(eq(users.email, invite.email)).limit(1);
+  let isExistingUser = false;
   if (!user) {
     const passwordHash = await bcrypt.hash(parsed.data.password, 10);
     [user] = await publicDb
@@ -78,6 +81,13 @@ invitesRouter.post("/accept/:token", async (req, res) => {
         name: parsed.data.name ?? invite.email.split("@")[0],
       })
       .returning();
+  } else {
+    isExistingUser = true;
+    const passwordValid = await bcrypt.compare(parsed.data.password, user.passwordHash);
+    if (!passwordValid) {
+      res.status(401).json({ error: "Incorrect password. Use the password for your existing Komun account." });
+      return;
+    }
   }
   const existingTu = await publicDb
     .select()
@@ -93,15 +103,25 @@ invitesRouter.post("/accept/:token", async (req, res) => {
     });
   }
   if (invite.role === "resident" && invite.unitId) {
-    await tenantDb(tenant.slug, (db) =>
-      db.insert(unitMembers).values({
-        unitId: invite.unitId!,
-        userId: user.id,
-        role: "resident",
-      })
-    );
+    await tenantDb(tenant.slug, async (db) => {
+      const [existing] = await db
+        .select({ id: unitMembers.id })
+        .from(unitMembers)
+        .where(and(eq(unitMembers.unitId, invite.unitId!), eq(unitMembers.userId, user.id)))
+        .limit(1);
+      if (!existing) {
+        await db.insert(unitMembers).values({
+          unitId: invite.unitId!,
+          userId: user.id,
+          role: "resident",
+        });
+      }
+    });
   }
-  await publicDb.delete(invitesTable).where(eq(invitesTable.id, invite.id));
+  await publicDb
+    .update(invitesTable)
+    .set({ acceptedAt: new Date(), acceptedUserId: user.id })
+    .where(and(eq(invitesTable.id, invite.id), isNull(invitesTable.acceptedAt)));
   const tenantUserRows = await publicDb
     .select({ slug: tenants.slug })
     .from(tenantUsers)
@@ -121,5 +141,6 @@ invitesRouter.post("/accept/:token", async (req, res) => {
       tenantSlugs,
     },
     accessToken,
+    existingUser: isExistingUser,
   });
 });

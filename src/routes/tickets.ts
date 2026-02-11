@@ -3,16 +3,24 @@ import multer from "multer";
 import { z } from "zod";
 import crypto from "node:crypto";
 import { requireAuth, requireTenant } from "../middleware/auth.js";
-import { isResident, getResidentUnitIds, requireStaff } from "../middleware/role.js";
+import {
+  isResident,
+  getResidentUnitIds,
+  getResidentBuildingIds,
+  requireStaff,
+} from "../middleware/role.js";
 import { tenantDb } from "../db/tenantDb.js";
 import {
   tickets as ticketsTable,
   ticketComments,
   ticketAttachments,
+  units as unitsTable,
 } from "../db/schema/tenant.js";
 import { eq, desc, inArray } from "drizzle-orm";
 import { storage } from "../storage/index.js";
 import type { Request } from "express";
+import { logAudit } from "../services/auditLog.js";
+import { getPublicUser, getPublicUsers } from "../services/userLookup.js";
 
 export const ticketsRouter = Router();
 ticketsRouter.use(requireAuth, requireTenant);
@@ -31,19 +39,49 @@ const updateTicketSchema = z.object({
 });
 const createCommentSchema = z.object({ body: z.string().min(1) });
 
+const ticketListSelect = {
+  id: ticketsTable.id,
+  unitId: ticketsTable.unitId,
+  reporterId: ticketsTable.reporterId,
+  title: ticketsTable.title,
+  description: ticketsTable.description,
+  status: ticketsTable.status,
+  createdAt: ticketsTable.createdAt,
+  updatedAt: ticketsTable.updatedAt,
+} as const;
+
 ticketsRouter.get("/", async (req, res) => {
   const slug = req.tenantSlug!;
+  const buildingIdParam = req.query.buildingId as string | undefined;
+  const buildingId = buildingIdParam ? parseInt(buildingIdParam, 10) : undefined;
+
   const list = await tenantDb(slug, async (db) => {
+    if (buildingId != null && !Number.isNaN(buildingId)) {
+      // Residents may only query buildings they belong to.
+      if (isResident(req)) {
+        const buildingIds = await getResidentBuildingIds(slug, req.user!.userId);
+        if (!buildingIds.includes(buildingId)) return [];
+      }
+      // Tickets for ANY unit in the building (includes tickets reported by non-residents).
+      return db
+        .select(ticketListSelect)
+        .from(ticketsTable)
+        .innerJoin(unitsTable, eq(ticketsTable.unitId, unitsTable.id))
+        .where(eq(unitsTable.buildingId, buildingId))
+        .orderBy(desc(ticketsTable.createdAt));
+    }
+
     if (isResident(req)) {
       const unitIds = await getResidentUnitIds(slug, req.user!.userId);
       if (unitIds.length === 0) return [];
       return db
-        .select()
+        .select(ticketListSelect)
         .from(ticketsTable)
         .where(inArray(ticketsTable.unitId, unitIds))
         .orderBy(desc(ticketsTable.createdAt));
     }
-    return db.select().from(ticketsTable).orderBy(desc(ticketsTable.createdAt));
+
+    return db.select(ticketListSelect).from(ticketsTable).orderBy(desc(ticketsTable.createdAt));
   });
   res.json(list);
 });
@@ -62,17 +100,20 @@ ticketsRouter.post("/", async (req, res) => {
       return;
     }
   }
-  const [row] = await tenantDb(slug, (db) =>
-    db
+  const actorId = req.user!.userId;
+  const [row] = await tenantDb(slug, async (db) => {
+    const [r] = await db
       .insert(ticketsTable)
       .values({
         unitId: parsed.data.unitId,
-        reporterId: req.user!.userId,
+        reporterId: actorId,
         title: parsed.data.title,
         description: parsed.data.description ?? null,
       })
-      .returning()
-  );
+      .returning();
+    if (r) await logAudit(db, { actorId, action: "create", entityType: "ticket", entityId: r.id, details: { title: r.title } });
+    return r ? [r] : [];
+  });
   res.status(201).json(row);
 });
 
@@ -104,7 +145,12 @@ ticketsRouter.get("/:id", async (req, res) => {
     res.status(result.status).json(result.body);
     return;
   }
-  res.json(result.ticket);
+  const ticket = result.ticket as { reporterId: number; [k: string]: unknown };
+  const reporterUser = await getPublicUser(ticket.reporterId);
+  res.json({
+    ...result.ticket,
+    reporterUser: reporterUser ? { id: reporterUser.id, name: reporterUser.name, email: reporterUser.email } : null,
+  });
 });
 
 ticketsRouter.delete("/:id", requireStaff, async (req, res) => {
@@ -114,9 +160,12 @@ ticketsRouter.delete("/:id", requireStaff, async (req, res) => {
     return;
   }
   const slug = req.tenantSlug!;
-  const [deleted] = await tenantDb(slug, (db) =>
-    db.delete(ticketsTable).where(eq(ticketsTable.id, id)).returning({ id: ticketsTable.id })
-  );
+  const actorId = req.user!.userId;
+  const [deleted] = await tenantDb(slug, async (db) => {
+    const [r] = await db.delete(ticketsTable).where(eq(ticketsTable.id, id)).returning({ id: ticketsTable.id });
+    if (r) await logAudit(db, { actorId, action: "delete", entityType: "ticket", entityId: id });
+    return r ? [r] : [];
+  });
   if (!deleted) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -145,9 +194,12 @@ ticketsRouter.patch("/:id", async (req, res) => {
   if (Object.keys(update).length > 0) {
     update.updatedAt = new Date();
   }
-  const [row] = await tenantDb(slug, (db) =>
-    db.update(ticketsTable).set(update).where(eq(ticketsTable.id, id)).returning()
-  );
+  const actorId = req.user!.userId;
+  const [row] = await tenantDb(slug, async (db) => {
+    const [r] = await db.update(ticketsTable).set(update).where(eq(ticketsTable.id, id)).returning();
+    if (r) await logAudit(db, { actorId, action: "update", entityType: "ticket", entityId: id, details: parsed.data });
+    return r ? [r] : [];
+  });
   if (!row) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -170,7 +222,15 @@ ticketsRouter.get("/:id/comments", async (req, res) => {
   const list = await tenantDb(slug, (db) =>
     db.select().from(ticketComments).where(eq(ticketComments.ticketId, id)).orderBy(ticketComments.createdAt)
   );
-  res.json(list);
+  const userIds = [...new Set(list.map((c) => c.userId))];
+  const userMap = await getPublicUsers(userIds);
+  const listWithUsers = list.map((c) => ({
+    ...c,
+    user: userMap[c.userId]
+      ? { id: userMap[c.userId].id, name: userMap[c.userId].name, email: userMap[c.userId].email }
+      : null,
+  }));
+  res.json(listWithUsers);
 });
 
 ticketsRouter.post("/:id/comments", async (req, res) => {
@@ -190,12 +250,15 @@ ticketsRouter.post("/:id/comments", async (req, res) => {
     res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
     return;
   }
-  const [row] = await tenantDb(slug, (db) =>
-    db
+  const actorId = req.user!.userId;
+  const [row] = await tenantDb(slug, async (db) => {
+    const [r] = await db
       .insert(ticketComments)
-      .values({ ticketId: id, userId: req.user!.userId, body: parsed.data.body })
-      .returning()
-  );
+      .values({ ticketId: id, userId: actorId, body: parsed.data.body })
+      .returning();
+    if (r) await logAudit(db, { actorId, action: "create", entityType: "ticket_comment", entityId: r.id, details: { ticketId: id } });
+    return r ? [r] : [];
+  });
   res.status(201).json(row);
 });
 
@@ -219,12 +282,15 @@ ticketsRouter.post("/:id/attachments", upload.single("file"), async (req, res) =
   const ext = file.originalname.split(".").pop() ?? "bin";
   const fileKey = `tenants/${slug}/tickets/${id}/${crypto.randomUUID()}.${ext}`;
   await storage.put(fileKey, file.buffer, file.mimetype);
-  const [row] = await tenantDb(slug, (db) =>
-    db
+  const actorId = req.user!.userId;
+  const [row] = await tenantDb(slug, async (db) => {
+    const [r] = await db
       .insert(ticketAttachments)
       .values({ ticketId: id, fileKey, filename: file.originalname })
-      .returning()
-  );
+      .returning();
+    if (r) await logAudit(db, { actorId, action: "create", entityType: "ticket_attachment", entityId: r.id, details: { ticketId: id, filename: file.originalname } });
+    return r ? [r] : [];
+  });
   res.status(201).json(row);
 });
 

@@ -6,9 +6,11 @@ import { requireAuth, requireTenant } from "../middleware/auth.js";
 import { requireStaff } from "../middleware/role.js";
 import { tenantDb } from "../db/tenantDb.js";
 import { documents as documentsTable } from "../db/schema/tenant.js";
-import { eq, desc, and, or, isNull, inArray } from "drizzle-orm";
+import { eq, desc, or, isNull, inArray } from "drizzle-orm";
 import { storage } from "../storage/index.js";
 import { isResident, getResidentBuildingIds } from "../middleware/role.js";
+import { logAudit } from "../services/auditLog.js";
+import { getPublicUsers } from "../services/userLookup.js";
 
 export const documentsRouter = Router();
 documentsRouter.use(requireAuth, requireTenant);
@@ -71,7 +73,13 @@ documentsRouter.get("/", async (req, res) => {
       .limit(limit)
       .offset(offset);
   });
-  res.json(list);
+  const userIds = [...new Set(list.map((d) => d.uploadedBy))];
+  const userMap = await getPublicUsers(userIds);
+  const listWithUsers = list.map((d) => ({
+    ...d,
+    uploadedByUser: userMap[d.uploadedBy] ? { id: userMap[d.uploadedBy].id, name: userMap[d.uploadedBy].name, email: userMap[d.uploadedBy].email } : null,
+  }));
+  res.json(listWithUsers);
 });
 
 documentsRouter.post("/", requireStaff, upload.single("file"), async (req, res) => {
@@ -90,18 +98,21 @@ documentsRouter.post("/", requireStaff, upload.single("file"), async (req, res) 
   const fileKey = `tenants/${slug}/documents/${crypto.randomUUID()}.${ext}`;
   await storage.put(fileKey, file.buffer, file.mimetype);
   const buildingId = parsed.data.buildingId != null && !Number.isNaN(parsed.data.buildingId) ? parsed.data.buildingId : null;
-  const [row] = await tenantDb(slug, (db) =>
-    db
+  const actorId = req.user!.userId;
+  const [row] = await tenantDb(slug, async (db) => {
+    const [r] = await db
       .insert(documentsTable)
       .values({
         title: parsed.data.title,
         buildingId,
         fileKey,
         filename: file.originalname,
-        uploadedBy: req.user!.userId,
+        uploadedBy: actorId,
       })
-      .returning()
-  );
+      .returning();
+    if (r) await logAudit(db, { actorId, action: "create", entityType: "document", entityId: r.id, details: { title: r.title, filename: r.filename } });
+    return r ? [r] : [];
+  });
   res.status(201).json(row);
 });
 
@@ -120,7 +131,11 @@ documentsRouter.delete("/:id", requireStaff, async (req, res) => {
     res.status(404).json({ error: "Not found" });
     return;
   }
-  await tenantDb(slug, (db) => db.delete(documentsTable).where(eq(documentsTable.id, id)));
+  const actorId = req.user!.userId;
+  await tenantDb(slug, async (db) => {
+    await db.delete(documentsTable).where(eq(documentsTable.id, id));
+    await logAudit(db, { actorId, action: "delete", entityType: "document", entityId: id, details: { title: doc.title } });
+  });
   try {
     await storage.delete(doc.fileKey);
   } catch {

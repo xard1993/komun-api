@@ -37,6 +37,13 @@ export async function getResidentBuildingIds(
   return [...new Set(rows.map((r) => r.buildingId))];
 }
 
+/** Returns true if the user is an org admin (org_owner or org_admin). */
+export function isAdmin(req: Request): boolean {
+  if (!req.user || !req.tenantSlug) return false;
+  const role = req.user.roleByTenant[req.tenantSlug];
+  return role === "org_owner" || role === "org_admin";
+}
+
 /** Require staff (non-resident). Returns 403 for residents. */
 export async function requireStaff(
   req: Request,
@@ -49,6 +56,23 @@ export async function requireStaff(
   }
   if (isResident(req)) {
     res.status(403).json({ error: "Access denied: residents cannot access this resource" });
+    return;
+  }
+  next();
+}
+
+/** Require org admin (org_owner or org_admin). Returns 403 for non-admins. */
+export async function requireAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  if (!req.user || !req.tenantSlug) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  if (!isAdmin(req)) {
+    res.status(403).json({ error: "Access denied: admins only" });
     return;
   }
   next();

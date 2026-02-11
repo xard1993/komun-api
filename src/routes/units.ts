@@ -7,6 +7,7 @@ import { publicDb } from "../db/index.js";
 import { users } from "../db/schema/public.js";
 import { units as unitsTable, unitMembers } from "../db/schema/tenant.js";
 import { eq, and, inArray } from "drizzle-orm";
+import { logAudit } from "../services/auditLog.js";
 
 export const unitsRouter = Router();
 unitsRouter.use(requireAuth, requireTenant, requireStaff);
@@ -69,9 +70,12 @@ unitsRouter.patch("/:id", async (req, res) => {
     return;
   }
   const slug = req.tenantSlug!;
-  const [row] = await tenantDb(slug, (db) =>
-    db.update(unitsTable).set(parsed.data).where(eq(unitsTable.id, id)).returning()
-  );
+  const actorId = req.user!.userId;
+  const [row] = await tenantDb(slug, async (db) => {
+    const [r] = await db.update(unitsTable).set(parsed.data).where(eq(unitsTable.id, id)).returning();
+    if (r) await logAudit(db, { actorId, action: "update", entityType: "unit", entityId: id, details: parsed.data });
+    return r ? [r] : [];
+  });
   if (!row) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -88,12 +92,15 @@ unitsRouter.delete("/:id/members/:userId", async (req, res) => {
     return;
   }
   const slug = req.tenantSlug!;
-  const [row] = await tenantDb(slug, (db) =>
-    db
+  const actorId = req.user!.userId;
+  const [row] = await tenantDb(slug, async (db) => {
+    const [r] = await db
       .delete(unitMembers)
       .where(and(eq(unitMembers.unitId, unitId), eq(unitMembers.userId, userId)))
-      .returning({ id: unitMembers.id })
-  );
+      .returning({ id: unitMembers.id });
+    if (r) await logAudit(db, { actorId, action: "delete", entityType: "unit_member", entityId: r.id, details: { unitId, userId } });
+    return r ? [r] : [];
+  });
   if (!row) {
     res.status(404).json({ error: "Not found" });
     return;
@@ -108,9 +115,12 @@ unitsRouter.delete("/:id", async (req, res) => {
     return;
   }
   const slug = req.tenantSlug!;
-  const [row] = await tenantDb(slug, (db) =>
-    db.delete(unitsTable).where(eq(unitsTable.id, id)).returning({ id: unitsTable.id })
-  );
+  const actorId = req.user!.userId;
+  const [row] = await tenantDb(slug, async (db) => {
+    const [r] = await db.delete(unitsTable).where(eq(unitsTable.id, id)).returning({ id: unitsTable.id });
+    if (r) await logAudit(db, { actorId, action: "delete", entityType: "unit", entityId: id });
+    return r ? [r] : [];
+  });
   if (!row) {
     res.status(404).json({ error: "Not found" });
     return;

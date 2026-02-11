@@ -1,1 +1,69 @@
-{"version":"7","dialect":"postgresql","entries":[{"idx":0,"version":"7","when":1736182900000,"tag":"0000_initial_tenant","breakpoints":true},{"idx":1,"version":"7","when":1736183000000,"tag":"0001_announcements_building_id","breakpoints":true},{"idx":2,"version":"7","when":1736183100000,"tag":"0002_documents_building_id","breakpoints":true}]}
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1736182900000,
+      "tag": "0000_initial_tenant",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1736183000000,
+      "tag": "0001_announcements_building_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1736183100000,
+      "tag": "0002_documents_building_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1739160000000,
+      "tag": "0003_meeting_minutes",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1770815609571,
+      "tag": "0004_financial_budget_fees",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1770815700000,
+      "tag": "0005_budget_dates",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1770815800000,
+      "tag": "0006_budget_missing_payments_reason",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1770815900000,
+      "tag": "0007_budget_approvals",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1770816000000,
+      "tag": "0008_budget_rejection_and_documents",
+      "breakpoints": true
+    }
+  ]
+}

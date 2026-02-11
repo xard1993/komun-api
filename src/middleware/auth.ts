@@ -118,3 +118,23 @@ export async function requireTenant(
   req.tenantSlug = tenantSlug;
   next();
 }
+
+/** Sets req.tenantSlug from X-Tenant and verifies tenant exists. Does not require auth. For public approval links. */
+export async function setTenantFromHeader(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  const tenantSlug = (req.headers["x-tenant"] as string)?.trim();
+  if (!tenantSlug) {
+    res.status(400).json({ error: "X-Tenant header required" });
+    return;
+  }
+  const [tenant] = await publicDb.select({ id: tenants.id }).from(tenants).where(eq(tenants.slug, tenantSlug)).limit(1);
+  if (!tenant) {
+    res.status(404).json({ error: "Tenant not found" });
+    return;
+  }
+  req.tenantSlug = tenantSlug;
+  next();
+}
